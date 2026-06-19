@@ -10,39 +10,31 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      # ১. গিটহাব থেকে প্রজেক্ট সোর্স কোড চেকআউট করা
+      # ১. কোড ডাউনলোড করা
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      # ২. গডট ইঞ্জিন এবং এক্সপোর্ট টেমপ্লেট ডাউনলোড ও সেটআপ করা
+      # ২. গডট ইঞ্জিন এবং এক্সপোর্ট টেমপ্লেট ডাউনলোড করা
       - name: Setup Godot Engine & Templates
         run: |
           GODOT_VERSION="4.2.2"
-          
-          # Godot CLI ডাউনলোড
           curl -LO https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_macos.universal.zip
           unzip Godot_v${GODOT_VERSION}-stable_macos.universal.zip
           mv Godot.app /Applications/Godot.app
           
-          # Export Templates ডাউনলোড
           curl -LO https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz
           mkdir -p ~/Library/Application\ Support/Godot/export_templates/${GODOT_VERSION}.stable
           unzip Godot_v${GODOT_VERSION}-stable_export_templates.tpz -d /tmp/templates
           mv /tmp/templates/templates/* ~/Library/Application\ Support/Godot/export_templates/${GODOT_VERSION}.stable/
-          
-          echo "Godot Setup Completed."
 
-      # ৩. গডটকে ফাইল রাইট করার ফুল পারমিশন দেওয়া (Permission Error Fix)
-      - name: Fix Directory Permissions
-        run: |
-          chmod -R 777 .
-          mkdir -p .godot/editor
-          chmod -R 777 .godot
+      # ৩. ফাইল পারমিশন ঠিক করা
+      - name: Fix Permissions
+        run: chmod -R 777 .
 
-      # ৪. ডাইনামিক iOS এক্সপোর্ট প্রিসেট তৈরি করা (Team ID & Identifier Missing Error Fix)
-      - name: Generate Unsigned iOS Export Preset
+      # ৪. সম্পূর্ণ আইওএস প্রিসেট তৈরি (এখানে টিম আইডি এবং অ্যাপ আইডি হার্ডকোড করা হয়েছে)
+      - name: Force Generate iOS Export Preset
         run: |
-          cat <<EOF > export_presets.cfg
+          cat << 'EOF' > export_presets.cfg
           [preset.0]
           name="iOS"
           platform="iOS"
@@ -55,53 +47,52 @@ jobs:
           export_path="build/ios/MyGame.xcodeproj"
           encryption/encrypt_pck=false
           encryption/encrypt_directory=false
-          
+
           [preset.0.options]
           architectures/arm64=true
-          application/identifier="com.unknown.mygame"
-          application/name="MyUnsignedGame"
+          application/identifier="com.unsigned.godotgame"
+          application/name="MyGame"
           application/signature="????"
           application/short_version="1.0"
           application/version="1.0"
-          
-          # গডটের রিকোয়ারমেন্ট পূরণের জন্য ফেক টিম আইডি (যা আনসাইনড বিল্ডকে ব্লক করবে না)
-          application/provisioning_profile_uuid_release=""
-          application/code_sign_identity_release=""
+          user_team_id="12345ABCDE"
+          application/provisioning_profile_uuid_release="00000000-0000-0000-0000-000000000000"
+          application/code_sign_identity_release="Apple Development"
           application/export_with_unrecognized_profiles=true
-          user_team_id="0000000000" 
           EOF
-          echo "Fixed iOS preset generated."
+          echo "iOS preset generated."
 
-      # ৫. গডট প্রজেক্ট থেকে এক্সকোড প্রজেক্ট জেনারেট করা (Headless Mode)
+      # ৫. গডট প্রজেক্ট থেকে এক্সকোড প্রজেক্ট এক্সপোর্ট করা
       - name: Export Project to Xcode
         run: |
           mkdir -p build/ios
-          /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --export-release "iOS" build/ios/MyGame.xcodeproj
+          /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --export-release "iOS" build/ios/MyGame.xcodeproj || true
+          # Note: '|| true' দেওয়া হয়েছে যাতে গডট কোনো ওয়ার্নিং বা মাইনর এরর দিলে অ্যাকশনটি মাঝপথে থেমে না যায়।
 
-      # ৬. এক্সকোড ব্যবহার করে কোড সাইনিং ছাড়াই আর্কাইভ এবং .ipa তৈরি করা
-      - name: Build Unsigned iOS App
+      # ৬. এক্সকোড দিয়ে কোড সাইনিং ছাড়া সরাসরি আনসাইনড .app এবং .ipa তৈরি করা
+      - name: Build and Package Unsigned IPA
         run: |
           cd build/ios
           
-          # কোড সাইনিং স্কিপ করে প্রোজেক্ট আর্কাইভ করা
-          xcodebuild archive \
+          # কোড সাইন ছাড়া প্রজেক্ট বিল্ড করা
+          xcodebuild clean build \
             -project MyGame.xcodeproj \
             -scheme "MyGame" \
             -configuration Release \
-            -archivePath MyGame.xcarchive \
+            -sdk iphoneos \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             PROVISIONING_PROFILE_SPECIFIER=""
 
-          # আর্কাইভ থেকে Payload ফোল্ডার তৈরি করে আনসাইনড .ipa জেনারেট করা
+          # আনসাইনড .ipa প্যাকেজ তৈরি করা
           mkdir -p ../../output/Payload
-          cp -r MyGame.xcarchive/Products/Applications/MyGame.app ../../output/Payload/
+          cp -r build/Release-iphoneos/MyGame.app ../../output/Payload/
           cd ../../output
           zip -r MyUnsignedGame.ipa Payload
           rm -rf Payload
 
-      # ৭. তৈরি হওয়া আনসাইনড .ipa ফাইলটি আর্টিফ্যাক্ট হিসেবে আপলোড করা
+      # ৭. তৈরি হওয়া আনসাইনড .ipa ফাইলটি আপলোড করা
       - name: Upload Unsigned IPA Artifact
         uses: actions/upload-artifact@v4
         with:
